@@ -1,68 +1,64 @@
-using Distributions
-using ExponentialAction
-using Memoization
-using LinearAlgebra
-
 # ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 # Continuous Time Markov Chain (time-reversible with discrete state)
-struct CTMC <: AbstractProcess{Categorical}
-    statdist::Categorical      # stationary distribution
-    Q::AbstractMatrix{<:Real}  # rate matrix
-    _I::AbstractMatrix{<:Real} # identity used to compute exp action
+struct CTMC{D<:Categorical, M<:AbstractMatrix} <: AbstractProcess{D, Categorical}
+    statdist::D
+    Q::M
 end
 
-function CTMC(statvec::AbstractVector{<:Real}, Q::AbstractMatrix{<:Real})
-    @assert all(isapprox.(transpose(statvec) * Q, 0.0; atol=1e-16)) string(transpose(statvec) * Q) # statvec ∈ Ker(Qᵗ)
-    _I = Matrix{Real}(I, length(statvec), length(statvec))
-    return CTMC(Categorical(statvec), Q, _I)
+function CTMC(π::AbstractVector{<:Real}, Q::AbstractMatrix{<:Real})
+    n = length(π)
+    size(Q) == (n, n) || throw(DimensionMismatch("Q must be $n x $n"))
+    all(π .>= 0) || throw(ArgumentError("stationary probabilities must be nonnegative"))
+    isapprox(sum(π), one(eltype(π)); atol=1e-10) || throw(ArgumentError("stationary probabilities must sum to one"))
+    all(isapprox.(vec(sum(Q; dims=2)), 0; atol=1e-10)) || throw(ArgumentError("rows of Q must sum to zero"))
+    all(Q[i, j] >= 0 for i in 1:n for j in 1:n if i != j) || throw(ArgumentError("off-diagonal entries of Q must be nonnegaive"))
+    all(isapprox.(transpose(π) * Q, 0; atol=1e-10)) || throw(ArgumentError("π must be stationary for Q"))
+
+    return CTMC(Categorical(π), Q)
 end
 
 function CTMC(Q::AbstractMatrix{<:Real})
-    # compute statdist from eq: statdist @ Q = 0
-    #todo catch errors when Q doesn't have statdist
-    n = size(Q, 1)
-    statdist = transpose(Q) \ zeros(n)
-    return CTMC(statdist, Q)
+    # compute statdist from eq: statdist * Q = 0 and 1ᵀπ=1
+    # can replace last row of Q with 1's to capture both.
+    n, m = size(Q)
+    n == m || throw(DimensionMismatch("Q must be square"))
+
+    A = copy(transpose(Q))
+    b = zeros(eltype(Q), n)
+    A[end, :] .= one(eltype(Q))
+    b[end] = one(eltype(Q))
+    π = A \ b
+    return CTMC(π, Q)
 end
 
 # Create a matrix r[i, j] = ℙ[Xᵢ, Yⱼ | process p]
 # which gives the joint probability of points Xᵢ and Yⱼ under process p
-function jointlogpdf!(r::AbstractMatrix{<:Real}, c::CTMC, t::Real,
+function jointlogpdf!(r::AbstractMatrix, c::CTMC, t::Real,
                       X::AbstractVecOrMat,
                       Y::AbstractVecOrMat)
-    @views r .= jointlp(c, t)[vec(X), vec(Y)]
+    r .= jointlp(c, t)[vec(X), vec(Y)]
     return r
 end
 
 function statlogpdf!(r::AbstractVector{<:Real}, c::CTMC,
                      X::AbstractVecOrMat)
-    # need to take transpose to make X vector so that it works with Categorical
-    logpdf!(r, statdist(c), X')
+    r .= logpdf.(Ref(statdist(c)), vec(X))
+    return r
 end
 
-@memoize transmat(c::CTMC, t::Real) = expv(t, c.Q, c._I)
+transmat(c::CTMC, t::Real) = exp(t * c.Q)
 
 statdist(c::CTMC) = c.statdist
 
-function jointlp(c::CTMC, t::Real)
-    P = transmat(c, t)
-    return log.(P) .+ logpdf(statdist(c))
-end
+jointlp(c::CTMC, t::Real) = log.(transmat(c, t)) .+ reshape(log.(prob(statdist(c))), :, 1)
 
-function transdist(c::CTMC, t::Real, x₀)
-    P = transmat(c, t)
-    return Categorical(P[x₀, :])
-end
-
-function transdist(c::CTMC, t::Real, x₀::AbstractArray)
-    P = transmat(c, t)
-    return Categorical(P[x₀[1], :])
-end
+transdist(c::CTMC, t::Real, x₀::Integer) = Categorical(transmat(c, t)[x₀, :])
+transdist(c::CTMC, t::Real, x₀::AbstractArray) = transdist(c, t, only(x₀))
 
 num_states(c::CTMC) = size(c.Q, 1)
 
 
-show(io::IO, c::CTMC) = print(io, "CTMC(" *
+Base.show(io::IO, c::CTMC) = print(io, "CTMC(" *
                                   "\nnum states: " * string(num_states(c)) *
                                   "\nstat dist: " * string(round.(statdist(c).p; digits=3)) *
                                   "\nQ matrix: " * string(round.(c.Q; digits=3)) *
@@ -87,17 +83,19 @@ show(io::IO, c::CTMC) = print(io, "CTMC(" *
 # Q = S diag(Π) where S is symmetric exchangeability matrix,
 #        Π is equilibrium frequencies
 
-function SubstitutionProcess(S::LowerTriangular, Π::AbstractVector; r = 1.0)
-    S = Symmetric(S, :L)
+function substitution_process(S::LowerTriangular, Π::AbstractVector; r = 1.0)
+    r > 0 || throw(ArgumentError("rate must be positive"))
+    S = Matrix(Symmetric(S, :L))
     S[diagind(S)] .= 0.0
+
     Q = S * Diagonal(Π)
-    Q[diagind(Q)] .= sum(-Q, dims = 2)
+    Q[diagind(Q)] .= -vec(sum(-Q, dims = 2))
+
     mean_replacement = -dot(Q[diagind(Q)], Π)
+    mean_replacement > 0 || throw(ArgumentError("mean substitution rate must be positive"))
+
     Q ./= mean_replacement
-    @assert isapprox(-dot(Q[diagind(Q)], Π), 1.0; atol=1e-8) "mean replacement rate should be 1"
     Q .*= r
-    @assert all(isapprox.(sum(-Q, dims = 2), 0.0; atol=1e-8)) "rows of Q should sum to 0"
-    @assert all(isapprox.(Diagonal(Π) * Q, (Diagonal(Π) * Q)'; atol=1e-8)) "Q should satisfy detailed balance w.r.t. Π"
 
     return CTMC(Π, Q)
 end

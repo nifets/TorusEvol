@@ -1,59 +1,80 @@
-using Distributions, Random
-using PDMats
-using LogExpFunctions, LinearAlgebra
-using Plots
 
-using Bijectors
-import Base: length, eltype, show
-import Distributions: _logpdf, _logpdf!, mean, _rand!
+# Wrapped Diffusion Transition Distribution Node
 
+# This defines a pdf p(x) = tpdₜ(θ₀, x | 𝚯)
+# which is the distribution of a particle moving according to a wrapped normal diffusion
+# 𝚯, started at location θ₀ and allowed to diffuse for time t
+struct WrappedDiffusionTransition{P,T,V,D,W} <: ContinuousMultivariateDistribution
+    process::P
+    t::T
+    x₀::V
+    driftdists::D # driftdists[k] = WN(μᵐₜ, Γₜ), where m = 𝕃[k]
+    # winddist[k] = wₖ(θ) gives the probability of the winding number of the unwrapped
+    # X ~ N(μ, Σ) being equal to 𝕃[k] ∈ 2πℤᵈ, given θ = cmod(X), sampled over the
+    # distribution of WN(μ, Σ); i.e. wₖ(θ) is a measure of the contribution of each point in the 2πℤᵈ lattice to the overall pdf
+    logweights::W
+end
 
-# ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+Base.length(d::WrappedDiffusionTransition) = Base.length(d.process);
+Base.eltype(d::WrappedDiffusionTransition) = Base.eltype(d.process);
+Base.show(io::IO, n::WrappedDiffusionTransition) = print(io, "WrappedDiffusionTransition(" *
+                                              "\n𝚯: " * string(n.process) *
+                                              "\nt: " * string(n.t) *
+                                              "\nx₀: " * string(n.x₀) *
+                                              "\n)")
+
 # Wrapped Diffusion
-
-# WD(μ, Σ, Α) - analogue of OU(μ, Σ, Α) over 𝕋ᵈ, with stationary distribution ~ WN(μ, ½Α⁻¹Σ)
-struct WrappedDiffusion <: AbstractProcess{ContinuousMultivariateDistribution}
-    μ::AbstractVector{<:Real}           # mean
-    Σ::AbstractMatrix{<:Real}           # infinitesimal covariance
-    Α::AbstractMatrix{<:Real}           # drift
-    _½Α⁻¹Σ::AbstractMatrix{<:Real}      # stationary covariance
-
-    statdist::WrappedNormal # stationary distribution
-
-    r::Real                 # memoized 𝑟(Α)
-    q::Real                 # memoized 𝑞(Α)
+# WD(μ, Σ, A) - analogue of OU(μ, Σ, A) over 𝕋ᵈ, with stationary distribution ~ WN(μ, statcov), statcov = ½A⁻¹Σ
+struct WrappedDiffusion{V,S,M,C,W<:WrappedNormal} <: AbstractProcess{W,WrappedDiffusionTransition}
+    μ::V           # mean
+    Σ::S           # infinitesimal covariance
+    A::M           # drift
+    statcov::C     # stationary covariance
+    statdist::W    # stationary distribution
 end
 
+Base.show(io::IO, 𝚯::WrappedDiffusion) = print(io, "WrappedDiffusion(" *
+                                          "\ndim: " * string(Base.length(𝚯)) *
+                                          "\nμ: " * string(𝚯.μ) *
+                                          "\nΣ: " * string(𝚯.Σ) *
+                                          "\nA: " * string(𝚯.A) *
+                                          "\n)")
 
-# __________________________________________________________________________________________
-# Constructors
+Base.length(𝚯::WrappedDiffusion) = Base.length(𝚯.μ)
+Base.eltype(𝚯::WrappedDiffusion) = Base.eltype(𝚯.statdist);
 
-function WrappedDiffusion(μ::AbstractVector{T},
-                          Σ::AbstractPDMat{T},
-                          Α::AbstractMatrix{T}) where T <: Real
-    # Make sure ½Α⁻¹Σ is positive definite
-    _½Α⁻¹Σ = PDMat(Symmetric(0.5 * inv(Α) * Σ))
-    μ = cmod(μ)
-    w = WrappedNormal(μ, _½Α⁻¹Σ)
+Statistics.mean(𝚯::WrappedDiffusion) = 𝚯.μ
+lattice(𝚯::WrappedDiffusion) = lattice(𝚯.statdist)
 
-    WrappedDiffusion(μ, Σ, Α, _½Α⁻¹Σ, w, 𝑟(Α), 𝑞(Α))
-end
+statdist(𝚯::WrappedDiffusion) = 𝚯.statdist
+transdist(𝚯::WrappedDiffusion, t::Real, θ₀::AbstractVector{<:Real}) =
+    WrappedDiffusionTransition(𝚯, t, θ₀)
 
-# Make μ, Σ and Α have the same element type
-function WrappedDiffusion(μ::AbstractVector{<:Real},
-                          Σ::AbstractPDMat{<:Real},
-                          Α::AbstractMatrix{<:Real})
-    R = Base.promote_eltype(μ, Σ, Α)
-    WrappedDiffusion(convert(AbstractArray{R}, μ),
-                     convert(AbstractArray{R}, Σ),
-                     convert(AbstractArray{R}, Α))
+
+
+recenter(𝚯::WrappedDiffusion, μ::AbstractVector{<:Real}) = WrappedDiffusion(μ, 𝚯.Σ, 𝚯.A)
+
+function stationary_covariance(A, Σ)
+    d = size(A, 1)
+    T = promote_type(eltype(A), eltype(Σ))
+    Id = Matrix{T}(I, d, d)
+    operator = kron(Id, A) + kron(A, Id)
+    C = reshape(operator \ vec(Matrix(Σ)), d, d)
+    return PDMat(Symmetric(C))
 end
 
 # Ensure Σ positive definite
 function WrappedDiffusion(μ::AbstractVector{<:Real},
                           Σ::AbstractMatrix{<:Real},
-                          Α::AbstractMatrix{<:Real})
-    WrappedDiffusion(μ, PDMat(Σ), Α)
+                          A::AbstractMatrix{<:Real})
+    d = length(μ)
+    size(Σ) == (d, d) || throw(DimensionMismatch("Σ must be $d x $d"))
+    size(A) == (d, d) || throw(DimensionMismatch("A must be $d x $d"))
+    Σpd = PDMat(Symmetric(Σ))
+    statcov = stationary_covariance(A, Σpd)
+    wrapped_μ = cmod(μ)
+    statdist = WrappedNormal(wrapped_μ, statcov)
+    return WrappedDiffusion(wrapped_μ, Σpd, A, statcov, statdist)
 end
 
 # Constructor for 2-dimensional drift
@@ -62,184 +83,101 @@ end
 function WrappedDiffusion(μ_𝜙::Real, μ_𝜓::Real,
                           σ_𝜙::Real, σ_𝜓::Real,
                           α_𝜙::Real, α_𝜓::Real, α_cov::Real)
-    @assert (α_𝜙 * α_𝜓 > α_cov^2) string(α_𝜙) * " " * string(α_𝜓)* " " * string(α_cov)
-    @assert σ_𝜙 * σ_𝜓 > 0
+    σ_𝜙 > 0 || throw(ArgumentError("σ_𝜙 must be positive"))
+    σ_𝜓 > 0 || throw(ArgumentError("σ_𝜓 must be positive"))
+    α_𝜙 * α_𝜓 > α_cov^2 || throw(ArgumentError("drift parameters must define a stable process"))
 
     Σ = PDiagMat([σ_𝜙^2, σ_𝜓^2])
-    Α = [α_𝜙 (σ_𝜙*α_cov/σ_𝜓); (σ_𝜓*α_cov/σ_𝜙) α_𝜓]
-    WrappedDiffusion([μ_𝜙, μ_𝜓], Σ, Α)
+    A = [α_𝜙 (σ_𝜙*α_cov/σ_𝜓); (σ_𝜓*α_cov/σ_𝜙) α_𝜓]
+    WrappedDiffusion([μ_𝜙, μ_𝜓], Σ, A)
 end
 
-# __________________________________________________________________________________________
-# Probability methods
-
-# Domain Dimension
-Base.length(𝚯::WrappedDiffusion) = length(𝚯.μ)
-
-# Domain field type
-Base.eltype(𝚯::WrappedDiffusion) = eltype(𝚯.statdist);
-
-# Mean of stationary distribution of 𝚯
-mean(𝚯::WrappedDiffusion) = 𝚯.μ
-
-# Stationary truncated lattice
-lattice(𝚯::WrappedDiffusion) = lattice(𝚯.statdist)
-
-# Stationary distribution
-statdist(𝚯::WrappedDiffusion) = 𝚯.statdist
-
-# Transition distribution
-transdist(𝚯::WrappedDiffusion, t::Real, θ₀::AbstractVector{<:Real}) =
-    WrappedDiffusionNode(𝚯, t, θ₀)
-
-# Optimized for several transition starting points
-function transdist!(r::AbstractVector, 𝚯::WrappedDiffusion,
-                    t::Real, Θ₀::AbstractVecOrMat{<:Real})
-    _WrappedDiffusionNodes!(r, 𝚯, t, Θ₀)
-end
-
-function recenter(𝚯::WrappedDiffusion, μ::AbstractVector{<:Real})
-    return WrappedDiffusion(μ, 𝚯.Σ, 𝚯.Α)
-end
-
-# __________________________________________________________________________________________
-# Transition Density Computation Methods
-
-𝑟(Α::AbstractMatrix{<:Real}) = tr(Α) / 2;
-𝑞(Α::AbstractMatrix{<:Real}) = √(abs(det(Α - 𝑟(Α)I)))
-function 𝑎(t::Real, r::Real, q::Real)
-    E = exp(-r*t) * (cosh(q*t) + r * sinh(q*t) / q)
-    isnan(E) ? 0.0 : E # handle 0 * inf
-end
-function 𝑏(t::Real, r::Real, q::Real)
-    E = exp(-r*t)*(sinh(q*t) / q)
-    isnan(E) ? 0.0 : E # handle 0 * inf
-end
-𝑠(t::Real, r::Real, q::Real) = 1 - 𝑎(2t, r, q);
-𝑖(t::Real, r::Real, q::Real) = 𝑏(2t, r, q) / 2;
+## Transition logic
 
 # e⁻ᵗᴬ - the 'drag' of the diffusion - attraction to current point
 function drift_coefficient(𝚯::WrappedDiffusion, t::Real)
-    if length(𝚯) == 2
-        return 𝑎(t, 𝚯.r, 𝚯.q) * I + 𝑏(t, 𝚯.r, 𝚯.q) * 𝚯.Α
-    else
-        throw("e⁻ᵗᴬ only implemented for 2 dimensions")
+    if size(𝚯.A) == (2,2)
+        return drift_coefficient_2d(𝚯.A, t)
     end
+    return exp(-t * 𝚯.A)
 end
+
+function drift_coefficient_2d(A, t)
+    r = tr(A) / 2
+    q² = r^2 - det(A)
+    q² < 0 && return exp(-t * A)
+    q = sqrt(q²)
+    return 𝑎(-t, r, q) * I + 𝑏(-t, r, q) * A
+end
+𝑎(t, r, q) =  exp(r * t) * cosh(q*t) - r * 𝑏(t, r, q)
+𝑏(t, r, q) = iszero(q) ? exp(r * t) * t : exp(r * t) * sinh(q * t) / q
 
 # Γₜ - accumulated covariance through time
-function Γ(𝚯::WrappedDiffusion, t::Real)
-    @assert t > 0
-    if length(𝚯) == 2
-        Γₜ = 𝑠(t, 𝚯.r, 𝚯.q) * Matrix(𝚯._½Α⁻¹Σ) + 𝑖(t, 𝚯.r, 𝚯.q) * Matrix(𝚯.Σ)
-    else
-        throw("Γ only implemented for 2 dimensions")
-    end
-    Γₜ
+function transition_covariance(𝚯::WrappedDiffusion, t::Real)
+    t > zero(t) || throw(ArgumentError("t must be positive"))
+    B = drift_coefficient(𝚯, t)
+    return transition_covariance(B, 𝚯.statcov)
 end
 
-
-# ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-# Wrapped Diffusion Transition Distribution Node
-
-# This defines a pdf p(x) = tpdₜ(θ₀, x | 𝚯)
-# which is the distribution of a particle moving according to a wrapped normal diffusion
-# 𝚯, started at location θ₀ and allowed to diffuse for time t
-struct WrappedDiffusionNode <: ContinuousMultivariateDistribution
-    𝚯::WrappedDiffusion
-    t::Real
-    θ₀::AbstractVector{<:Real}
-
-    # driftdists[k] = WN(μᵐₜ, Γₜ), where m = 𝕃[k]
-    driftdists::AbstractVector{WrappedNormal}
-
-    # winddist[k] = wₖ(θ) gives the probability of the winding number of the unwrapped
-    # X ~ N(μ, Σ) being equal to 𝕃[k] ∈ 2πℤᵈ, given θ = cmod(X), sampled over the
-    # distribution of WN(μ, Σ)
-    # i.e. wₖ(θ) is a measure of the contribution of each point in the 2πℤᵈ lattice to the
-    # overall pdf
-    winddist::Categorical      # Winding Number Weight Distribution
-
+function transition_covariance(B, C)
+    Cmat = Matrix(C)
+    PDMat(Symmetric(Cmat - B*Cmat*transpose(B)))
 end
 
-
-# __________________________________________________________________________________________
-# Constructors
-function WrappedDiffusionNode(𝚯::WrappedDiffusion, t::Real, θ₀::AbstractVector{<:Real})
-    # hacky - idea is that if an angle is missing we want the transition
-    # distribution to be as diffuse as possible
-    if any(isnan.(θ₀))
-        driftdists = [WrappedNormal([0.0, 0.0], 5*I)]
-        return WrappedDiffusionNode(𝚯, t, θ₀, driftdists, Categorical([1.0]))
-    end
-
-
-    e⁻ᵗᴬ = drift_coefficient(𝚯, t)
-    μᴹₜ = cmod(mean(𝚯) .+ e⁻ᵗᴬ * (θ₀ - mean(𝚯) .+ lattice(𝚯)))
-    Γₜ = Γ(𝚯, t)
-    driftdists = WrappedNormal.(eachcol(μᴹₜ), Ref(Γₜ))
+function WrappedDiffusionTransition(𝚯::WrappedDiffusion, t::Real, x₀::AbstractVector{<:Real})
+    length(x₀) == length(𝚯) || throw(DimensionMismatch("x₀ has the wrong dimension"))
+    t > zero(t) || throw(ArgumentError("t must be positive"))
+    B = drift_coefficient(𝚯, t)
+    Γₜ = transition_covariance(B, 𝚯.statcov)
 
     wn = statdist(𝚯)
-    shifted_lattice = θ₀ .+ lattice(wn)
-    p = exp.(logpdf(unwrapped(wn), shifted_lattice) .- logpdf(wn, θ₀))
-    winddist = Categorical(p)
+    shifted_lattice = x₀ .+ lattice(wn)
+    μᴹₜ = cmod(mean(𝚯) .+ B * (shifted_lattice .- mean(𝚯)))
 
-    WrappedDiffusionNode(𝚯, t, θ₀, driftdists, winddist)
+    transition_lattice = lattice(WrappedNormal(zeros(length(𝚯)), Γₜ))
+    driftdists = WrappedNormal.(eachcol(μᴹₜ), Ref(Γₜ), Ref(transition_lattice))
+
+    logweights = logpdf(unwrapped(wn), shifted_lattice) .- logpdf(wn, x₀)
+    logweights .-= logsumexp(logweights)
+
+    return WrappedDiffusionTransition(𝚯, t, x₀, driftdists, logweights)
 end
 
-# Optimized for several nodes
-function _WrappedDiffusionNodes!(r::AbstractVector, 𝚯::WrappedDiffusion,
-                                 t::Real, Θ₀::AbstractVecOrMat{<:Real})
-    e⁻ᵗᴬ = drift_coefficient(𝚯, t)
-    Γₜ = PDMat(Γ(𝚯, t))
+# Optimized for several transition starting points
+function transdist!(r::AbstractVector, 𝚯::WrappedDiffusion,
+                    t::Real, X₀::AbstractVecOrMat{<:Real})
+    size(X₀, 1) == length(𝚯) || throw(DimensionMismatch("X₀ has the wrong dimension"))
+    t > zero(t) || throw(ArgumentError("t must be positive"))
+
+    B = drift_coefficient(𝚯, t)
+    Γₜ = transition_covariance(B, 𝚯.statcov)
     wn = statdist(𝚯)
-    𝕃 = lattice(WrappedNormal(zeros(length(𝚯)), Γₜ))
+    transition_lattice = lattice(WrappedNormal(zeros(length(𝚯)), Γₜ))
 
-    for i ∈ axes(Θ₀, 2)
-        @views θ₀ = Θ₀[:, i]
-        if any(isnan.(θ₀))
-            driftdists = [WrappedNormal([0.0, 0.0], 5*I)]
+    for i in axes(X₀, 2)
+        @views x₀ = X₀[:, i]
+        shifted_lattice = x₀ .+ lattice(wn)
+        μᴹₜ = cmod(mean(𝚯) .+ B * (shifted_lattice .- mean(𝚯)))
+        driftdists = WrappedNormal.(eachcol(μᴹₜ), Ref(Γₜ), Ref(transition_lattice))
+        logweights = logpdf(unwrapped(wn), shifted_lattice) .- logpdf(wn, x₀)
+        logweights .-= logsumexp(logweights)
 
-            r[i] = WrappedDiffusionNode(𝚯, t, θ₀, driftdists, Categorical([1.0]))
-        else
-            shifted_lattice = θ₀ .+ lattice(wn)
-            μᴹₜ = cmod(mean(𝚯) .+ e⁻ᵗᴬ * (shifted_lattice .- mean(𝚯)))
-
-            normals = MvNormal.(eachcol(μᴹₜ), Ref(Γₜ))
-            driftdists = WrappedNormal.(normals, Ref(𝕃))
-
-            p = logpdf(unwrapped(wn), shifted_lattice) .- logpdf(wn, θ₀)
-            p .= exp.(p .- logsumexp(p))
-            winddist = Categorical(p)
-            r[i] = WrappedDiffusionNode(𝚯, t, θ₀, driftdists, winddist)
-        end
+        r[i] = WrappedDiffusionTransition(𝚯, t, x₀, driftdists, logweights)
     end
-    r
+    return r
 end
 
-
-# __________________________________________________________________________________________
-# Distribution Methods
-
-# Domain Dimension
-length(d::WrappedDiffusionNode) = length(d.𝚯);
-
-# Domain field type
-eltype(d::WrappedDiffusionNode) = eltype(d.𝚯);
-
-# optimized
-# Generate samples according to the transition distribution
-function _rand!(rng::AbstractRNG, d::WrappedDiffusionNode, x::AbstractVecOrMat{<:Real})
+function Distributions._rand!(rng::AbstractRNG, d::WrappedDiffusionTransition, x::AbstractVecOrMat{<:Real})
     n = size(x, 2)
 
     # step 1 - sample from winddist
-    windnums = rand(rng, d.winddist, n)
+    windnums = rand(rng, Categorical(exp.(d.logweights)), n)
 
     # step 2 - sample from WN(μᵐₜ, Γₜ)
     for w ∈ eachindex(d.driftdists)
         indx = windnums .== w
         if any(indx)
-            @views @timeit to "rand" _rand!(rng, d.driftdists[w], x[:, indx])
+            @views Distributions._rand!(rng, d.driftdists[w], x[:, indx])
         end
     end
 
@@ -247,56 +185,21 @@ function _rand!(rng::AbstractRNG, d::WrappedDiffusionNode, x::AbstractVecOrMat{<
 end
 
 # Log density of WN over 𝕋ᵈ
-function _logpdf(d::WrappedDiffusionNode, x::AbstractVector{<: Real})
-    t = d.t
-    θ₀ = d.θ₀
-    θₜ = cmod(x)
-     # if t == 0, distribution degenerates into Dirac(θ₀)
-    if t < eps(typeof(t))
-        return θ₀ .== θₜ ? Inf : -Inf
-    end
-
-    return logsumexp(logpdf.(d.driftdists, Ref(θₜ)) .+ log.(pdf(d.winddist)))
-end
+Distributions._logpdf(d::WrappedDiffusionTransition, x::AbstractVector{<: Real}) =
+    logsumexp(logpdf.(d.driftdists, Ref(cmod(x))) .+ d.logweights)
 
 function Distributions._logpdf!(r::AbstractArray{<:Real},
-                                d::WrappedDiffusionNode, X::AbstractVecOrMat{<: Real})
-    t = d.t
+                                d::WrappedDiffusionTransition, X::AbstractVecOrMat{<: Real})
     wrapped_X = cmod.(X)
 
-    # if t == 0, distribution degenerates into Dirac(θ₀)
-    if t < eps(typeof(t))
-        r .= map(θₜ -> d.θ₀ == θₜ ? Inf : -Inf, eachcol(wrapped_X))
-    else
-        r .= -Inf
-        tape = similar(r)
-        tape .= -Inf
-        for i ∈ eachindex(d.driftdists)
-            tape .= _logpdf!(tape, d.driftdists[i], wrapped_X)
-            r .= logaddexp.(r, tape .+ log(pdf(d.winddist)[i]))
-        end
+    r .= -Inf
+    tape = similar(r)
+    for i ∈ eachindex(d.driftdists)
+        Distributions._logpdf!(tape, d.driftdists[i], wrapped_X)
+        r .= logaddexp.(r, tape .+ d.logweights[i])
     end
 
     r
 end
 
-
-Bijectors.bijector(d::WrappedDiffusionNode) = Bijectors.Logit{1, Real}(-π, π)
-
-
-# __________________________________________________________________________________________
-# Plotting Methods
-
-# Print distribution parameters
-show(io::IO, 𝚯::WrappedDiffusion) = print(io, "WrappedDiffusion(" *
-                                          "\ndim: " * string(length(𝚯)) *
-                                          "\nμ: " * string(𝚯.μ) *
-                                          "\nΣ: " * string(𝚯.Σ) *
-                                          "\nΑ: " * string(𝚯.Α) *
-                                          "\n)")
-
-show(io::IO, n::WrappedDiffusionNode) = print(io, "WrappedDiffusionNode(" *
-                                              "\n𝚯: " * string(n.𝚯) *
-                                              "\nt: " * string(n.t) *
-                                              "\nθ₀: " * string(n.θ₀) *
-                                              "\n)")
+domain(d::WrappedDiffusionTransition) = domain(d.process)

@@ -1,28 +1,5 @@
-using Distributions, Random
-using PDMats
-using LinearAlgebra
-using Plots
-using DistributionsAD
-using Bijectors
-using Statistics
-using LogExpFunctions
-
-import Base: length, eltype, show, size
-import Distributions: _logpdf, _logpdf!, mean, _rand!
-
-using FastLogSumExp: mat_logsumexp_dual_reinterp! as fastlogsumexp!
-
-#using FastLogSumExp:
-
-# __________________________________________________________________________________________
-# Helper functions
-function ang_dist(ϕ_x, ϕ_y, ψ_x, ψ_y)
-    d = sqrt(4 - 2*cos(ϕ_x - ϕ_y) - 2*cos(ψ_x - ψ_y))
-    return d
-end
 # Map x to [-π, π)
 cmod(x::Real) = rem(x,2π, RoundNearest)
-
 cmod(v::AbstractArray{<:Real}) = cmod.(v)
 
 # Returns [-r,r]ᵈ ⊂ ℤᵈ
@@ -33,202 +10,115 @@ hyper_cube(r::Integer, d::Integer) =
 twoπ_hyper_cube(r::Integer, d::Integer) =
     2π .* hyper_cube(r, d)
 
-# Returns {x ∈ 2π[-r,r]ᵈ | d(x, 𝛷) < R} w.r.t Mahalanobis distance
-function discrete_ellipsoid(𝛷::MvNormal, r::Real, R::Real)
+function discrete_ellipsoid(𝛷::MvNormal; tol=1e-10)
+    0 < tol < 1 || throw(ArgumentError("tol must lie between 0 and 1"))
+
     d = length(𝛷)
-    cube = twoπ_hyper_cube(r, d)
-    mindist = 3 * sqmahal(𝛷, zeros(d))
-    ellipsoid = cube[:, sqmahal(𝛷, cube) .< max(R, mindist)]
-    ellipsoid
+    μ = mean(𝛷)
+    Σ = Matrix(cov(𝛷))
+    centred_normal = MvNormal(zeros(d), Σ)
+
+    radius = sqrt(quantile(Chisq(d), 1 - tol))
+    corners = hcat((collect(x) for x in Iterators.product(fill((-π, π), d)...))...)
+    cell_radius = sqrt(maximum(sqmahal(centred_normal, corners)))
+    expanded_radius = radius + cell_radius
+
+    winding_ranges = map(1:d) do i
+        extent = expanded_radius * sqrt(Σ[i, i])
+        first_winding = ceil(Int, (μ[i] - extent) / (2π))
+        last_winding = floor(Int, (μ[i] + extent) / (2π))
+        first_winding:last_winding
+    end
+
+    windings = hcat((collect(k) for k in Iterators.product(winding_ranges...))...)
+    lattice = 2π * windings
+    keep = sqmahal(𝛷, lattice) .<= expanded_radius^2
+    return lattice[:, keep]
 end
 
-function discrete_ellipsoid(𝛷::TuringDenseMvNormal, r::Real, R::Real)
-    n = MvNormal(mean(𝛷), cov(𝛷))
-    discrete_ellipsoid(n, r, R)
-end
 
-# ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 # Wrapped Normal Distribution
-
 # WN(μ, Σ) - analogue of N(μ, Σ) over 𝕋ᵈ
-struct WrappedNormal <: ContinuousMultivariateDistribution
-    𝛷::ContinuousMultivariateDistribution # the underlying unwrapped distribution
-    𝕃::AbstractMatrix{<:Real}             # 𝕃 ⊂ 2πℤᵈ truncated torus lattice
-                                          #    used to collect (most of) the probability mass
-                                          #    of 𝛷 into [-π, π)ᵈ
+struct WrappedNormal{D<:ContinuousMultivariateDistribution, L<:AbstractMatrix} <: ContinuousMultivariateDistribution
+    𝛷::D # the underlying unwrapped distribution
+    𝕃::L             # 𝕃 ⊂ 2πℤᵈ truncated torus lattice
+                     #    used to collect (most of) the probability mass
+                     #    of 𝛷 into [-π, π)ᵈ
+    function WrappedNormal{D, L}(𝛷::D, 𝕃::L) where {D<:ContinuousMultivariateDistribution, L<:AbstractMatrix}
+        size(𝕃, 1) == length(𝛷) || throw(DimensionMismatch("lattice dimension does not match distribution"))
+        return new{D, L}(𝛷, 𝕃)
+    end
 end
 
+WrappedNormal(𝛷::D, 𝕃::L) where {D<:ContinuousMultivariateDistribution, L<:AbstractMatrix} =
+    WrappedNormal{D, L}(𝛷, 𝕃)
 
-# # __________________________________________________________________________________________
-# # Constructors & Getters
-
-# 𝛷 = N(μ, Σ)
-# 𝕃 = 2π[-r,r]ᵈ ∩ B(𝛷, R) (in sqmahal distance)
-function WrappedNormal(μ::AbstractVector{<:Real}, Σ)
+function WrappedNormal(μ::AbstractVector{<:Real}, Σ; tol=1e-10)
     𝛷 = MvNormal(cmod(μ), Σ)
-    # R = 12.0
-    # r = ceil(Int, R * 1.0)
-    # 𝕃 = discrete_ellipsoid(𝛷, r, R)
-
-    #temp - consider only the 8 neighbouring quadrants in the lattice
-    𝕃 = twoπ_hyper_cube(1, length(μ))
-
-    WrappedNormal(𝛷, 𝕃)
+    𝕃 = discrete_ellipsoid(𝛷; tol)
+    return WrappedNormal(𝛷, 𝕃)
 end
 
-# # Make μ and Σ have the same element type
-# function WrappedNormal(μ::AbstractVector{<:Real}, Σ::AbstractPDMat{<:Real})
-#     Rtype = Base.promote_eltype(μ, Σ)
-#     WrappedNormal(convert(AbstractArray{Rtype}, μ), convert(AbstractArray{Rtype}, Σ))
-# end
+function WrappedNormal(μ::AbstractVector{<:Real}, Σ, winding_radius::Integer)
+    winding_radius >= 0 ||throw(ArgumentError("winding_radius must be nonnegative"))
+    𝛷 = MvNormal(cmod(μ), Σ)
+    𝕃 = twoπ_hyper_cube(winding_radius, length(μ))
 
-# # Ensure Σ positive definite
-# function WrappedNormal(μ::AbstractVector{<:Real}, Σ::AbstractMatrix{<:Real})
-#     # will throw an error if Σ is not positive definite
-#     WrappedNormal(μ, PDMat(Σ))
-# end
-
-function WrappedNormal(μ::Real, Σ::Real)
-    WrappedNormal([μ], [Σ;;])
+    return WrappedNormal(𝛷, 𝕃)
 end
 
+function WrappedNormal(μ::AbstractVector{<:Real}, Σ, 𝕃::AbstractMatrix)
+    return WrappedNormal(MvNormal(cmod(μ), Σ), 𝕃)
+end
 
+function WrappedNormal(μ::Real, σ²::Real; kwargs...)
+    WrappedNormal([μ], [σ²;;]; kwargs...)
+end
 
-# Underlying unwrapped distribution
+function WrappedNormal(μ::Real, σ²::Real, winding_radius::Integer)
+    WrappedNormal([μ], [σ²;;], winding_radius)
+end
+
 unwrapped(wn::WrappedNormal) = wn.𝛷
-
-# Truncated lattice used to recover some of the mass of 𝛷 from ℝᵈ
 lattice(wn::WrappedNormal) = wn.𝕃
 
-
-# __________________________________________________________________________________________
-# Distribution Methods
-
-const WN_GRID_SIZE = 14
-const WN2_DOMAIN = Domain(hcat(map(collect, vec(collect(Base.product(fill(-π:(2π/WN_GRID_SIZE):π, 2)...))))...), WN_GRID_SIZE*WN_GRID_SIZE)
-
-function domain(wn::WrappedNormal)
-    if length(wn) == 2
-        return WN2_DOMAIN
-    end
-    return []
-end
-
-# Domain Dimension
 Base.length(wn::WrappedNormal) = length(wn.𝛷)
-
-# Domain field type
 Base.eltype(wn::WrappedNormal) = eltype(wn.𝛷)
 
-# Generate samples according to WN
-#optimized
-function _rand!(rng::AbstractRNG, wn::WrappedNormal, x::AbstractVecOrMat{<: Real})
-    _rand!(rng, wn.𝛷, x)
+function Distributions._rand!(rng::AbstractRNG, wn::WrappedNormal, x::AbstractVecOrMat)
+    Distributions._rand!(rng, wn.𝛷, x)
     x .= cmod.(x)
     return x
 end
 
-# Log density of WN over 𝕋ᵈ
-function _logpdf(wn::WrappedNormal, x::AbstractVector{<: Real})
-    # Handling missing values
-    if any(isnan.(x))
-        return 0.0
-    end
+function Distributions._logpdf(wn::WrappedNormal, x::AbstractVector{<: Real})
     return logsumexp(logpdf(wn.𝛷, cmod.(x) .+ wn.𝕃))
 end
 
-#optimized
-function _logpdf!(r::AbstractArray{<: Real},
-                  wn::WrappedNormal, X::AbstractVecOrMat{<: Real})
-    # Handling missing values
-    if any(isnan.(X))
-        return 0.0
-    end
-    shifted_X = cmod.(X)
+function Distributions._logpdf!(r::AbstractVector,
+                                wn::WrappedNormal,
+                                X::AbstractMatrix)
+    size(X, 1) == length(wn) || throw(DimensionMismatch("expected $(length(wn))"))
+    wrapped_X = cmod.(X)
+    shifted_X = similar(wrapped_X)
+    shifted_logp = similar(r)
 
-    tape = similar(r, length(r), 2)
-    tape .= -Inf
-    r = @view tape[:, 1]
-    shifted_logp = @view tape[:, 2]
-    prev_col = [0.0, 0.0]
-    for col ∈ eachcol(wn.𝕃)
-        shifted_X .+= col .- prev_col
-        prev_col = col
-
+    r .= -Inf
+    for shift in eachcol(wn.𝕃)
+        shifted_X .= wrapped_X .+ reshape(shift, :, 1)
         logpdf!(shifted_logp, wn.𝛷, shifted_X)
         r .= logaddexp.(r, shifted_logp)
     end
-    copy(r)
-end
-
-# function _fastlogpdf!(r::AbstractArray{<: Real},
-#                       wn::WrappedNormal, X::AbstractMatrix{<: Real})
-#     shifted_X = cmod.(X)
-
-#     tape = Array{Real}(undef, length(r), 2)
-#     tape .= -Inf
-#     r = @view tape[:, 1]
-#     shifted_logp = @view tape[:, 2]
-#     prev_col = [0.0, 0.0]
-#     for col ∈ eachcol(wn.𝕃)
-#         shifted_X .+= col .- prev_col
-#         prev_col = col
-#         #logpdf!(shifted_logp, wn.𝛷, shifted_X)
-#         shifted_logp .= logpdf(wn.𝛷, shifted_X)
-#         # check dual
-#         fastlogsumexp!(r, tape)
-#     end
-#     copy(r)
-# end
-
-
-# This gives lower numerical errors but allocates much more memory
-function _accuratelogpdf!(r::AbstractArray{<: Real},
-                          wn::WrappedNormal, X::AbstractMatrix{<: Real})
-    d = size(X, 1); n = size(X, 2); m = size(wn.𝕃, 2)
-    a = reshape(X, d, n, :) .+ reshape(wn.𝕃, d, :, m)
-    lps = reshape(logpdf(wn.𝛷, reshape(a, d, :)), n, m)
-    logsumexp!(r, lps)
     r
 end
 
+Statistics.mean(wn::WrappedNormal) = mean(wn.𝛷)
 
-# Mean of WN over 𝕋ᵈ
-mean(wn::WrappedNormal) = mean(wn.𝛷)
-
-Statistics.cov(wn::WrappedNormal) = Statistics.cov(wn.𝛷)
-
-Bijectors.bijector(wn::WrappedNormal) = Bijectors.Logit{1, Real}(-π, π)
-
-
-# __________________________________________________________________________________________
-# Plotting Methods
-
-# Print distribution parameters
-show(io::IO, wn::WrappedNormal) = print(io, "WrappedNormal(" *
+Base.show(io::IO, wn::WrappedNormal) = print(io, "WrappedNormal(" *
                                           "\ndim: " * string(length(wn)) *
                                           "\nμ: " * string(wn.𝛷.μ) *
                                           "\nΣ: " * string(wn.𝛷.Σ) *
                                           "\n)")
 
-# Plot the points in 𝕃
-function plotlattice(wn::WrappedNormal, plt)
-    @assert length(wn) <= 3
-    scatter!(plt, eachrow(wn.𝕃)...,size=(400,400), title="", label="𝕃")
-end
+domain(d::WrappedNormal) = DomainSets.ProductDomain(ntuple(_ -> DomainSets.ClosedInterval(-π, π), length(d))...)
 
-
-# multiple inits
-# function _WrappedNormals(μ::VecOrMat{<:Real}, Σ::AbstractMatrix{<: Real})
-#     res = []
-#     𝛷 = MvNormal(zeros(size(μ, 1)), Σ)
-#     R = 10.0
-#     r = ceil(Int, R * 1.5)
-#     𝕃 = discrete_ellipsoid(𝛷, r, R)
-#     for i ∈ axes(μ, 2)
-#         @views 𝛷_i = 𝛷 + μ[:, i]
-#         wn = WrappedNormal{eltype(𝛷_i), typeof(𝛷_i.Σ), typeof(mean(𝛷_i))}(𝛷_i, 𝕃)
-#         push!(res, wn)
-#     end
-#     res
-# end

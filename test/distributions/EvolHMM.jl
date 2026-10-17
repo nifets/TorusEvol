@@ -1,9 +1,7 @@
 using LogExpFunctions
 using Distributions
 using TorusEvol
-using TimerOutputs
 
-reset_timer!(to)
 const NUM_PAIRHMM_TESTS = 10
 @testset "PairDataHMM test $v" for v ∈ 1:NUM_PAIRHMM_TESTS
     Random.seed!(TEST_SEED+v)
@@ -53,7 +51,6 @@ const NUM_PAIRHMM_TESTS = 10
 
     pairdatahmm = PairDataHMM(align_model, num_sites(X), num_sites(Y))
 
-    @timeit to "forward 1" lp = logpdf(pairdatahmm, emission_lps)
     @info lp
 
     prop = rand(Uniform(0, 1))
@@ -67,7 +64,6 @@ const NUM_PAIRHMM_TESTS = 10
     # Test the reversibility of the model:
     # marginalising the ancestor out is the same as having one descendant directly evolve
     #into a second descendant
-    @timeit to "forward 2" logpdf(triplehmm, emission_lps)
     @test logpdf(pairdatahmm, emission_lps) ≈ logpdf(triplehmm, emission_lps) atol=1e-2 rtol=0.05
 
     # X evolving into Y is the same as Y evolving into X

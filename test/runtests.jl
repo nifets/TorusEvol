@@ -2,20 +2,20 @@
 using TorusEvol
 using Test
 using Random
-
-include("distributions/torus_distributions.jl")
-include("distributions/processes.jl")
+using Statistics
+using Distributions
+using LogExpFunctions
+using LinearAlgebra
 
 const TEST_SEED = 123456
 printstyled("Running tests:\n", color=:blue)
 
-const all_tests = ["distributions/WrappedNormal", "models/TKF92", "distributions/EvolHMM"]
+include("distributions/properties.jl")
 
-tests = ["distributions/EvolHMM"]
+const all_tests = ["distributions/torus"]
 
 @testset "TorusEvol" begin
     @testset "Test $t" for t in all_tests
         include("$t.jl")
     end
-    print(to)
 end

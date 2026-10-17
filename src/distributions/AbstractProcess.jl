@@ -1,77 +1,64 @@
-using Distributions, DistributionsAD
-using LinearAlgebra
-using Memoization
-
-
-import Base: length, eltype, show
-import Distributions: _logpdf, _logpdf!, mean, _rand!
-
-struct Domain
-    data::AbstractArray
-    area::Real
-end
-length(Ω::Domain) = size(data(Ω), 2)
-area(Ω::Domain) = Ω.area
-data(Ω::Domain) = Ω.data
-
-# ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 # Interface for abstract (continuous time) reversible Markovian Processes
-abstract type AbstractProcess{D <: Distribution} end
+abstract type AbstractProcess{S <: Distribution, T <: Distribution} end
 
-# The stationary distribution of the process
-function statdist(::AbstractProcess) end
+"""
+    statdist(p::AbstractProcess)
 
-# The transition distribution at time t starting from x₀
-function transdist(::AbstractProcess, t::Real, x₀) end
+Return the stationary distribution of `p`
+"""
+function statdist end
 
-# The domain of the process
-domain(p::AbstractProcess) = domain(statdist(p))
+"""
+    transdist(p::AbstractProcess, t, x₀)
 
-# The joint distribution of x and y separated by time t
-jointdist(p::AbstractProcess, t::Real) = JointDistribution(statdist(p), transdist(p, t, x))
+Return the transition distribution of `p` at time `t` with initial state `x₀`
+"""
+function transdist end
 
 # The transition distributions at time t starting from each column of X₀
-function transdist!(r::AbstractVector, p::AbstractProcess,
-                    t::Real, X₀::AbstractVecOrMat{<:Real})
+function transdist!(r::AbstractVector{T},
+                    p::AbstractProcess{S,T},
+                    t,
+                    X₀::AbstractVecOrMat) where {S,T}
     r .= transdist.(Ref(p), Ref(t), eachcol(X₀))
     return r
 end
 
 # Create a matrix r[i, j] = ℙ[Xᵢ, Yⱼ | process p, time t]
 # which gives the joint probability of points Xᵢ and Yⱼ under process p
-function jointlogpdf!(r::AbstractMatrix{<:Real}, p::AbstractProcess{D}, t::Real,
+function jointlogpdf!(r::AbstractMatrix,
+                      p::AbstractProcess{S,T},
+                      t,
                       X::AbstractVecOrMat,
-                      Y::AbstractVecOrMat) where D <: Distribution
+                      Y::AbstractVecOrMat) where {S,T}
     m = size(Y, 2)
     # Construct transition distributions for each datapoint in Y
-    transdists = Array{D}(undef, m); transdist!(transdists, p, t, Y)
+    transdists = Vector{T}(undef, m); transdist!(transdists, p, t, Y)
 
     # Add to each column the log transition density from Y to X
     for j ∈ 1:m
         @views logpdf!(r[:, j], transdists[j], X)
     end
-    # Add to each row of r the log probability of the stationary distribution at Y
+    # Add to each column of r the log probability of the stationary distribution at Y
     r .+= logpdf(statdist(p), Y)'
     return r
 end
 
 # Create a vector r[i] = lℙ[Xᵢ| process p]
-function statlogpdf!(r::AbstractVector{<:Real}, p::AbstractProcess,
-                     X::AbstractVecOrMat)
-    r .= logpdf!(r, statdist(p), X)
+function statlogpdf!(r, p::AbstractProcess, X)
+    logpdf!(r, statdist(p), X)
     return r
 end
 
 # Create a matrix r[i, j] = ℙ[Yⱼ | Xᵢ, process p, time t]
 # which gives the joint probability of points Xᵢ and Yⱼ under process p
-function translogpdf!(r::AbstractMatrix{<:Real}, p::AbstractProcess{D}, t::Real,
+function translogpdf!(r::AbstractMatrix, p::AbstractProcess,
+                      t,
                       X::AbstractVecOrMat,
-                      Y::AbstractVecOrMat) where D <: Distribution
+                      Y::AbstractVecOrMat)
     jointlogpdf!(r, p, t, X, Y)
-
-    # remove from each column the statdist of X
+    # remove from each row the statdist of X
     r .-= logpdf(statdist(p), X)
-
     return r
 end
 
@@ -81,7 +68,8 @@ end
 # r[i, j] = lℙ[Xᵢ, Yⱼ | process p, time t]
 # r[i, m+1] = lℙ[Xᵢ | process p]
 # r[n+1, j] = lℙ[Yⱼ | process p]
-function fulllogpdf!(r::AbstractMatrix{<:Real}, p::AbstractProcess, t::Real,
+function fulllogpdf!(r::AbstractMatrix, p::AbstractProcess,
+                     t,
                      X::AbstractVecOrMat,
                      Y::AbstractVecOrMat)
     n = size(X, 2)
@@ -94,17 +82,19 @@ function fulllogpdf!(r::AbstractMatrix{<:Real}, p::AbstractProcess, t::Real,
 end
 
 
-function randjoint(p::AbstractProcess, t::Real)
-    x = rand(statdist(p))
-    y = rand(transdist(p, t, x))
+function randjoint(rng::AbstractRNG, p::AbstractProcess, t)
+    x = rand(rng, statdist(p))
+    y = rand(rng, transdist(p, t, x))
     return x, y
 end
 
-function randtrans(p::AbstractProcess, t::Real, x)
-    y = rand(transdist(p, t, x))
-    return y
-end
+randjoint(p::AbstractProcess, t) = randjoint(Random.default_rng(), p, t)
 
+randtrans(rng::AbstractRNG, p::AbstractProcess, t, x) = rand(rng, transdist(p, t, x))
+
+randtrans(p::AbstractProcess, t, x) = randtrans(Random.default_rng(), p, t, x)
 
 Base.length(p::AbstractProcess) = length(statdist(p))
 Base.eltype(p::AbstractProcess) = eltype(statdist(p))
+
+domain(p::AbstractProcess) = domain(statdist(p))
