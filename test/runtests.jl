@@ -10,9 +10,9 @@ using LinearAlgebra
 const TEST_SEED = 123456
 printstyled("Running tests:\n", color=:blue)
 
-include("distributions/properties.jl")
+include("processes/properties.jl")
 
-const all_tests = ["distributions/torus", "distributions/substitution", "distributions/regime"]
+const all_tests = ["processes/torus", "processes/substitution", "processes/regime", "processes/ou", "processes/marginalisation"]
 
 @testset "TorusEvol" begin
     @testset "Test $t" for t in all_tests

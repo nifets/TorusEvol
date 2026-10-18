@@ -120,5 +120,4 @@ Base.show(io::IO, wn::WrappedNormal) = print(io, "WrappedNormal(" *
                                           "\nΣ: " * string(wn.𝛷.Σ) *
                                           "\n)")
 
-domain(d::WrappedNormal) = DomainSets.ProductDomain(ntuple(_ -> DomainSets.ClosedInterval(-π, π), length(d))...)
-
+domain(d::WrappedNormal) = DomainSets.ProductDomain(ntuple(_ -> PeriodicInterval(-π, π), length(d))...)

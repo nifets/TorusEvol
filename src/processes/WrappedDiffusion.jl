@@ -95,11 +95,13 @@ end
 ## Transition logic
 
 # e⁻ᵗᴬ - the 'drag' of the diffusion - attraction to current point
-function drift_coefficient(𝚯::WrappedDiffusion, t::Real)
-    if size(𝚯.A) == (2,2)
-        return drift_coefficient_2d(𝚯.A, t)
+drift_coefficient(𝚯::WrappedDiffusion, t::Real) = drift_coefficient(𝚯.A, t)
+
+function drift_coefficient(A::AbstractMatrix, t::Real)
+    if size(A) == (2,2)
+        return drift_coefficient_2d(A, t)
     end
-    return exp(-t * 𝚯.A)
+    return exp(-t * A)
 end
 
 function drift_coefficient_2d(A, t)

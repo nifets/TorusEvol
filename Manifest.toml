@@ -2,7 +2,7 @@
 
 julia_version = "1.12.4"
 manifest_format = "2.0"
-project_hash = "2609a734f97dc389893cd9dc83b7d2388d7d2804"
+project_hash = "0ff0ca3c9de736614b87d6450e6953348c84800a"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -238,6 +238,12 @@ version = "0.8.3"
 deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 version = "1.7.0"
+
+[[deps.FastGaussQuadrature]]
+deps = ["LinearAlgebra", "SpecialFunctions", "StaticArrays"]
+git-tree-sha1 = "4916117dd032ec5959b7633aedbbac408ca5ddeb"
+uuid = "442a2c76-b920-505d-bb47-c5924d526838"
+version = "1.3.0"
 
 [[deps.FileWatching]]
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
@@ -655,7 +661,7 @@ uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 version = "1.11.0"
 
 [[deps.TorusEvol]]
-deps = ["BioSequences", "BioStructures", "ChainRulesCore", "DelimitedFiles", "Distributions", "DomainSets", "HCubature", "LinearAlgebra", "LogExpFunctions", "PDMats", "Random", "Statistics"]
+deps = ["BioSequences", "BioStructures", "ChainRulesCore", "DelimitedFiles", "Distributions", "DomainSets", "FastGaussQuadrature", "HCubature", "LinearAlgebra", "LogExpFunctions", "PDMats", "Random", "Statistics"]
 path = "."
 uuid = "4b860a26-b3bc-4b38-a9ed-83c1dc5d19b0"
 version = "0.1.0"

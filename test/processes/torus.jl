@@ -53,7 +53,7 @@ end
     @testset "lattice tolerance" begin
         tol = 1e-2
         wn = WrappedNormal([0.4, -1.2], [1.2 0.4; 0.4 0.8]; tol)
-        mass = integrate(x -> pdf(wn, x), domain(wn), Midpoint(300))
+        mass = integrate(x -> pdf(wn, x), domain(wn), Grid(300))
         @test 1 - tol - 2e-4 <= mass <= 1 + 2e-4
     end
 

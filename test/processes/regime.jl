@@ -6,8 +6,8 @@ site_statistics = [[x -> x[1] == regime for regime in 1:2];
     Random.seed!(TEST_SEED)
     helix = (WAG_substitution_process(), WrappedDiffusion(-1.0, -0.8, 1.0, 1.0, 1.0, 1.0, 0.5))
     sheet = (WAG_substitution_process(; r=2.0), WrappedDiffusion(-2.0, 2.2, 1.0, 3.0, 1.0, 2.0, 0.5))
-    grid = Midpoint(40)
-    rule = Midpoint(40)
+    grid = Grid(40)
+    rule = Grid(40)
     ts = (0.5, 2.0)
 
     product = ProductProcess(helix...)
@@ -23,7 +23,7 @@ site_statistics = [[x -> x[1] == regime for regime in 1:2];
     test_process(switching; statistics=site_statistics, ts, rule, grid, stationary_rtol=1e-3, semigroup_rtol=0.15)
 
     instant = RegimeProcess(switching_regimes([0.3, 0.7], 1e6), [helix, sheet])
-    nodes, _ = quadrature(Midpoint(10), domain(instant))
+    nodes, _ = quadrature(Grid(10), domain(instant))
     @test batchlogpdf(transdist(instant, 0.5, x), nodes) ≈ batchlogpdf(statdist(instant), nodes)
 
     @test_throws DimensionMismatch RegimeProcess(frozen_regimes([1.0]), [helix, sheet])

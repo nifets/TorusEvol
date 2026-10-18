@@ -2,7 +2,7 @@ batchlogpdf(d::UnivariateDistribution, points) = logpdf.(d, points)
 batchlogpdf(d::MultivariateDistribution, points) = logpdf(d, points)
 batchlogpdf(d::Distribution{TorusEvol.TupleVariate}, points) = logpdf.(Ref(d), points)
 
-function test_normalised(d; rule=Midpoint(), atol=1e-6)
+function test_normalised(d; rule=Grid(), atol=1e-6)
     @test integrate(x -> pdf(d, x), domain(d), rule) ≈ 1 atol=atol
 end
 
@@ -11,7 +11,7 @@ function test_batch_logpdf(d; n=20)
     @test batchlogpdf(d, points) ≈ [logpdf(d, x) for x in TorusEvol.eachpoint(points)]
 end
 
-function test_sampler(d; statistics, grid=Midpoint(), n=20_000, σ=5)
+function test_sampler(d; statistics, grid=Grid(), n=20_000, σ=5)
     nodes, weights = quadrature(grid, domain(d))
     masses = exp.(batchlogpdf(d, nodes)) .* weights
     samples = rand(d, n)
@@ -23,7 +23,7 @@ function test_sampler(d; statistics, grid=Midpoint(), n=20_000, σ=5)
     end
 end
 
-function test_distribution(d; statistics, grid=Midpoint())
+function test_distribution(d; statistics, grid=Grid())
     test_normalised(d; rule=grid)
     test_batch_logpdf(d)
     test_sampler(d; statistics, grid)
@@ -46,7 +46,7 @@ function test_stationary(process, ts; n=3, rule=Adaptive(), rtol=1e-4)
     end
 end
 
-function test_converges(process; t=50.0, grid=Midpoint(), atol=1e-6)
+function test_converges(process; t=50.0, grid=Grid(), atol=1e-6)
     nodes, _ = quadrature(grid, domain(process))
     stat = statdist(process)
     @test batchlogpdf(transdist(process, t, rand(stat)), nodes) ≈ batchlogpdf(stat, nodes) atol=atol
@@ -63,7 +63,7 @@ function test_semigroup(process, s, t; n=3, rule=Adaptive(), rtol=1e-4)
 end
 
 function test_process(process; statistics, ts=(0.1, 1.0, 5.0), t_converged=50.0,
-                      rule=Adaptive(), grid=Midpoint(), converges=true, stationary_rtol=1e-4,
+                      rule=Adaptive(), grid=Grid(), converges=true, stationary_rtol=1e-4,
                       semigroup_times=(0.3, 0.5), semigroup_rtol=1e-4)
     stat = statdist(process)
     test_distribution(stat; statistics, grid)
