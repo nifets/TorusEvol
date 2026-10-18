@@ -1,14 +1,12 @@
-fallback_logpdf(p, ts, ys; rule) =
-    invoke(descendants_logpdf, Tuple{TorusEvol.AbstractProcess, Any, Any}, p, ts, ys; rule)
+@testsnippet Fallbacks begin
+    fallback_logpdf(p, ts, ys; rule) =
+        invoke(descendants_logpdf, Tuple{TorusEvol.AbstractProcess,Any,Any}, p, ts, ys; rule)
+    fallback_posterior(p, ts, ys; rule) =
+        invoke(ancestral_posterior, Tuple{TorusEvol.AbstractProcess,Any,Any}, p, ts, ys; rule)
+end
 
-fallback_posterior(p, ts, ys; rule) =
-    invoke(ancestral_posterior, Tuple{TorusEvol.AbstractProcess,Any,Any}, p, ts, ys; rule)
-
-@testset "marginalisation" begin
-    Random.seed!(TEST_SEED)
-
+@testitem "marginalisation CTMC" setup=[Common] begin
     ts = [0.4, 1.0, 2.5]
-
     substitution = WAG_substitution_process()
     states = [3, 3, 17]
     P = [TorusEvol.transmat(substitution, t) for t in ts]
@@ -16,7 +14,10 @@ fallback_posterior(p, ts, ys; rule) =
     @test descendants_logpdf(substitution, ts, states) ≈ bruteforce
     @test descendants_logpdf(substitution, Float64[], Int[]) ≈ 0 atol=1e-12
     @test sum(last(ancestral_posterior(substitution, ts, states))) ≈ 1
+end
 
+@testitem "marginalisation OU" setup=[Common, Fallbacks] begin
+    ts = [0.4, 1.0, 2.5]
     ou_iso = OrnsteinUhlenbeck([0.5, -1.0], 1.5, 0.7)
     ys = [rand(transdist(ou_iso, t, [0.0, 0.0])) for t in ts]
     @test descendants_logpdf(ou_iso, ts, ys) ≈ fallback_logpdf(ou_iso, ts, ys; rule=Grid(30)) rtol=1e-8
@@ -24,8 +25,8 @@ fallback_posterior(p, ts, ys; rule) =
 
     posterior = ancestral_posterior(ou_iso, ts, ys)
     nodes, weights = fallback_posterior(ou_iso, ts, ys; rule=Grid(30))
-    grid_mean = sum(w.* x for (x,w) in zip(nodes, weights))
-    grid_cov = sum(w .* (x .- grid_mean) * (x .- grid_mean)' for (x,w) in zip(nodes, weights))
+    grid_mean = sum(w .* x for (x, w) in zip(nodes, weights))
+    grid_cov = sum(w .* (x .- grid_mean) * (x .- grid_mean)' for (x, w) in zip(nodes, weights))
     @test mean(posterior) ≈ grid_mean rtol=1e-8
     @test cov(posterior) ≈ grid_cov rtol=1e-8
 
