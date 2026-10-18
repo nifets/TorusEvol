@@ -17,7 +17,7 @@ const NUM_PAIRHMM_TESTS = 10
     E = rand(Geometric(0.2))+1
     proc_weights = rand(Dirichlet(E, 1.0))
 
-    sub_procs = reshape(fill(WAG_SubstitutionProcess(), E), 1, E)
+    sub_procs = reshape(fill(WAG_substitution_process(), E), 1, E)
 
     μ_𝜙 = rand(E); μ_𝜓 = rand(E); σ_𝜙 = rand(E); σ_𝜓 = rand(E);
     α_𝜙 = rand(E); α_𝜓 = rand(E); α_cov = rand(E); γ = rand(E)

@@ -10,7 +10,7 @@ Turing.setrdcache(true)
     # Sample time
     t ~ Exponential(1)
 
-    sub = WAG_SubstitutionProcess
+    sub = WAG_substitution_process
 
 
     # Sample structure parameters
@@ -227,7 +227,7 @@ function indel_angle_change(filled)
 end
 
 function pair_align(chainX, chainY; t=0.1)
-    sub = WAG_SubstitutionProcess
+    sub = WAG_substitution_process
 
     helix = deg2rad.([-90.0, -30.0])
     diff = WrappedDiffusion(helix, 1.0, 1.0, 4.0, 1.0, 1.0)

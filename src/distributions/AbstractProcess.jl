@@ -98,3 +98,4 @@ Base.length(p::AbstractProcess) = length(statdist(p))
 Base.eltype(p::AbstractProcess) = eltype(statdist(p))
 
 domain(p::AbstractProcess) = domain(statdist(p))
+domain(d::DiscreteUnivariateDistribution) = support(d)

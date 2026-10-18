@@ -50,9 +50,12 @@ transmat(c::CTMC, t::Real) = exp(t * c.Q)
 
 statdist(c::CTMC) = c.statdist
 
-jointlp(c::CTMC, t::Real) = log.(transmat(c, t)) .+ reshape(log.(prob(statdist(c))), :, 1)
+jointlp(c::CTMC, t::Real) = log.(transmat(c, t)) .+ reshape(log.(probs(statdist(c))), :, 1)
 
-transdist(c::CTMC, t::Real, x₀::Integer) = Categorical(transmat(c, t)[x₀, :])
+function transdist(c::CTMC, t::Real, x₀::Integer)
+    probabilities = max.(transmat(c, t)[x₀, :], 0)
+    return Categorical(probabilities ./ sum(probabilities))
+end
 transdist(c::CTMC, t::Real, x₀::AbstractArray) = transdist(c, t, only(x₀))
 
 num_states(c::CTMC) = size(c.Q, 1)
@@ -89,7 +92,7 @@ function substitution_process(S::LowerTriangular, Π::AbstractVector; r = 1.0)
     S[diagind(S)] .= 0.0
 
     Q = S * Diagonal(Π)
-    Q[diagind(Q)] .= -vec(sum(-Q, dims = 2))
+    Q[diagind(Q)] .= vec(sum(-Q, dims = 2))
 
     mean_replacement = -dot(Q[diagind(Q)], Π)
     mean_replacement > 0 || throw(ArgumentError("mean substitution rate must be positive"))

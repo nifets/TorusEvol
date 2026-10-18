@@ -11,7 +11,7 @@ using LinearAlgebra
 using LogExpFunctions
 
 include("distributions/AbstractProcess.jl")
-include("distributions/quadrature.jl")
+include("quadrature.jl")
 include("distributions/WrappedNormal.jl")
 include("distributions/WrappedDiffusion.jl")
 include("distributions/ResettingProcess.jl")
@@ -20,9 +20,9 @@ include("distributions/CTMC.jl")
 include("models/WAG.jl")
 
 export
-    WrappedNormal, WrappedDiffusion, ResettingProcess, SubstitutionProcess,
+    WrappedNormal, WrappedDiffusion, ResettingProcess, substitution_process,
     statdist, transdist, transdist!, jointlogpdf!,
     domain, Midpoint, Adaptive, quadrature, integrate,
-    WAG_SubstitutionProcess
+    WAG_substitution_process
 
 end #TorusEvol

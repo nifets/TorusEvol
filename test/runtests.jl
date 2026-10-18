@@ -12,7 +12,7 @@ printstyled("Running tests:\n", color=:blue)
 
 include("distributions/properties.jl")
 
-const all_tests = ["distributions/torus"]
+const all_tests = ["distributions/torus", "distributions/substitution"]
 
 @testset "TorusEvol" begin
     @testset "Test $t" for t in all_tests

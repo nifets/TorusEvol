@@ -103,7 +103,7 @@ end
 function simulator(T; λ = 0.1, μ = 0.10001, r = 0.9, γ = 0.1, tstep=0.001)
     chain = read("data/pdb/1A3N.pdb", PDB)["A"]
 
-    subprocess = WAG_SubstitutionProcess
+    subprocess = WAG_substitution_process
 
     helix = deg2rad.([-90.0, -30.0])
     diff = WrappedDiffusion(helix, 1.0, 1.0, 4.0, 1.0, 1.0)

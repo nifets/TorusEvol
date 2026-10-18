@@ -37,3 +37,6 @@ LogExpFunctions = "1.0.1"
 PDMats = "0.11.41"
 Random = "1.11.0"
 Statistics = "1.11.1"
+
+[workspace]
+projects = ["test"]
