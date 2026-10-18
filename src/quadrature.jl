@@ -32,7 +32,13 @@ quadrature(domain; n=100) = quadrature(Midpoint(n), domain)
 eachpoint(points::AbstractMatrix) = eachcol(points)
 eachpoint(points::AbstractVector) = points
 
-function integrate(f, domain::DomainSets.Domain, rule::Midpoint)
+function quadrature(rule::Midpoint, domains::Tuple)
+    factors = map(component -> quadrature(rule, component), domains)
+    grid = vec(collect(Iterators.product(map(((nodes, weights),) -> zip(eachpoint(nodes), weights), factors)...)))
+    return [map(first, point) for point in grid], [prod(map(last, point)) for point in grid]
+end
+
+function integrate(f, domain::Union{DomainSets.Domain,Tuple}, rule::Midpoint)
     nodes, weights = quadrature(rule, domain)
     return sum(f(x) * weight for (x, weight) in zip(eachpoint(nodes), weights))
 end
@@ -41,3 +47,8 @@ integrate(f, states::AbstractVector, ::QuadratureRule) = sum(f, states)
 
 integrate(f, domain::DomainSets.Domain, rule::Adaptive) =
     first(HCubature.hcubature(f, vcat(DomainSets.infimum(domain)), vcat(DomainSets.supremum(domain)); rtol=rule.rtol, maxevals=rule.maxevals))
+
+integrate(f, domains::Tuple{Any}, rule::Adaptive) = integrate(x -> f((x,)), only(domains), rule)
+
+integrate(f, domains::Tuple, rule::Adaptive) =
+    integrate(x -> integrate(rest -> f((x, rest...)), Base.tail(domains), rule), first(domains), rule)

@@ -1,5 +1,6 @@
 batchlogpdf(d::UnivariateDistribution, points) = logpdf.(d, points)
 batchlogpdf(d::MultivariateDistribution, points) = logpdf(d, points)
+batchlogpdf(d::Distribution{TorusEvol.TupleVariate}, points) = logpdf.(Ref(d), points)
 
 function test_normalised(d; rule=Midpoint(), atol=1e-6)
     @test integrate(x -> pdf(d, x), domain(d), rule) ≈ 1 atol=atol
@@ -10,8 +11,8 @@ function test_batch_logpdf(d; n=20)
     @test batchlogpdf(d, points) ≈ [logpdf(d, x) for x in TorusEvol.eachpoint(points)]
 end
 
-function test_sampler(d; statistics, n=20_000, σ=5)
-    nodes, weights = quadrature(domain(d))
+function test_sampler(d; statistics, grid=Midpoint(), n=20_000, σ=5)
+    nodes, weights = quadrature(grid, domain(d))
     masses = exp.(batchlogpdf(d, nodes)) .* weights
     samples = rand(d, n)
     for stat in statistics
@@ -22,10 +23,10 @@ function test_sampler(d; statistics, n=20_000, σ=5)
     end
 end
 
-function test_distribution(d; statistics)
-    test_normalised(d)
+function test_distribution(d; statistics, grid=Midpoint())
+    test_normalised(d; rule=grid)
     test_batch_logpdf(d)
-    test_sampler(d; statistics)
+    test_sampler(d; statistics, grid)
 end
 
 function test_reversible(process, ts; n=5, atol=1e-8)
@@ -45,8 +46,8 @@ function test_stationary(process, ts; n=3, rule=Adaptive(), rtol=1e-4)
     end
 end
 
-function test_converges(process; t=50.0, atol=1e-6)
-    nodes, _ = quadrature(domain(process))
+function test_converges(process; t=50.0, grid=Midpoint(), atol=1e-6)
+    nodes, _ = quadrature(grid, domain(process))
     stat = statdist(process)
     @test batchlogpdf(transdist(process, t, rand(stat)), nodes) ≈ batchlogpdf(stat, nodes) atol=atol
 end
@@ -62,14 +63,15 @@ function test_semigroup(process, s, t; n=3, rule=Adaptive(), rtol=1e-4)
 end
 
 function test_process(process; statistics, ts=(0.1, 1.0, 5.0), t_converged=50.0,
+                      rule=Adaptive(), grid=Midpoint(), converges=true, stationary_rtol=1e-4,
                       semigroup_times=(0.3, 0.5), semigroup_rtol=1e-4)
     stat = statdist(process)
-    test_distribution(stat; statistics)
+    test_distribution(stat; statistics, grid)
     for t in ts
-        test_distribution(transdist(process, t, rand(stat)); statistics)
+        test_distribution(transdist(process, t, rand(stat)); statistics, grid)
     end
     test_reversible(process, ts)
-    test_stationary(process, ts)
-    test_converges(process; t=t_converged)
-    test_semigroup(process, semigroup_times...; rtol=semigroup_rtol)
+    test_stationary(process, ts; rule, rtol=stationary_rtol)
+    converges && test_converges(process; t=t_converged, grid)
+    test_semigroup(process, semigroup_times...; rule, rtol=semigroup_rtol)
 end
